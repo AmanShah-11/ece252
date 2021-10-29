@@ -14,14 +14,16 @@
  */
 
 /** 
- * @file main.c
- * @brief cURL write call back to save received data in a shared memory first
- *        and then write the data to a file for verification purpose.
+ * @file main_2proc.c
+ * @brief Two processes system. The child process uses cURL to download data to
+ *        a shared memory region through cURL call back.
+ *        The parent process wait till the child to finish and then 
+ *        read the data from the shared memory region and output it to a file.
  *        cURL header call back extracts data sequence number from header.
+ *        Synchronization is done through waitpid, no semaphores are used.
  * @see https://curl.haxx.se/libcurl/c/getinmemory.html
  * @see https://curl.haxx.se/libcurl/using/
  * @see https://ec.haxx.se/callback-write.html
- * NOTE: we assume each image segment from the server is less than 10K
  */ 
 
 
@@ -39,7 +41,7 @@
 #define IMG_URL "http://ece252-1.uwaterloo.ca:2530/image?img=1&part=20"
 #define DUM_URL "https://example.com/"
 #define ECE252_HEADER "X-Ece252-Fragment: "
-#define BUF_SIZE 10240 /* 1024*10 = 10K */
+#define BUF_SIZE 10240  /* 1024*10 = 10K */
 
 /* This is a flattened structure, buf points to 
    the memory address immediately after 
@@ -48,7 +50,6 @@
    Note that the memory is a chunk of continuous bytes.
 
    On a 64-bit machine, the memory layout is as follows:
-
    +================+
    | buf            | 8 bytes
    +----------------+
@@ -173,16 +174,6 @@ int shm_recv_buf_init(RECV_BUF *ptr, size_t nbytes)
     return 0;
 }
 
-//int local_count;
-//while(1){
-//    mutex{
-//        local_count = count;
-//        count++;
-//    }
-//    curl(local_count);
-//    keep looping until count is 50;
-//}
-
 
 /**
  * @brief output data in memory to a file
@@ -218,7 +209,6 @@ int write_file(const char *path, const void *in, size_t len)
     return fclose(fp);
 }
 
-
 int main( int argc, char** argv ) 
 {
     CURL *curl_handle;
@@ -229,7 +219,8 @@ int main( int argc, char** argv )
     int shm_size = sizeof_shm_recv_buf(BUF_SIZE);
     char fname[256];
     pid_t pid =getpid();
-
+    pid_t cpid = 0;
+    
     printf("shm_size = %d.\n", shm_size);
     shmid = shmget(IPC_PRIVATE, shm_size, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
     if ( shmid == -1 ) {
@@ -239,7 +230,8 @@ int main( int argc, char** argv )
 
     p_shm_recv_buf = shmat(shmid, NULL, 0);
     shm_recv_buf_init(p_shm_recv_buf, BUF_SIZE);
-    
+
+
     if (argc == 1) {
         strcpy(url, IMG_URL); 
     } else {
@@ -247,51 +239,63 @@ int main( int argc, char** argv )
     }
     printf("%s: URL is %s\n", argv[0], url);
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    cpid = fork();
 
-    /* init a curl session */
-    curl_handle = curl_easy_init();
+    if ( cpid == 0 ) {          /* child proc download */
+    
+        curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    if (curl_handle == NULL) {
-        fprintf(stderr, "curl_easy_init: returned NULL\n");
-        return 1;
-    }
+        /* init a curl session */
+        curl_handle = curl_easy_init();
 
-    /* specify URL to get */
-    curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+        if (curl_handle == NULL) {
+            fprintf(stderr, "curl_easy_init: returned NULL\n");
+            return 1;
+        }
 
-    /* register write call back function to process received data */
-    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_cb_curl); 
-    /* user defined data structure passed to the call back function */
-    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)p_shm_recv_buf);
+        /* specify URL to get */
+        curl_easy_setopt(curl_handle, CURLOPT_URL, url);
 
-    /* register header call back function to process received header data */
-    curl_easy_setopt(curl_handle, CURLOPT_HEADERFUNCTION, header_cb_curl); 
-    /* user defined data structure passed to the call back function */
-    curl_easy_setopt(curl_handle, CURLOPT_HEADERDATA, (void *)p_shm_recv_buf);
+        /* register write call back function to process received data */
+        curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_cb_curl); 
+        /* user defined data structure passed to the call back function */
+        curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)p_shm_recv_buf);
 
-    /* some servers requires a user-agent field */
-    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+        /* register header call back function to process received header data */
+        curl_easy_setopt(curl_handle, CURLOPT_HEADERFUNCTION, header_cb_curl); 
+        /* user defined data structure passed to the call back function */
+        curl_easy_setopt(curl_handle, CURLOPT_HEADERDATA, (void *)p_shm_recv_buf);
+
+        /* some servers requires a user-agent field */
+        curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
 
     
-    /* get it! */
-    res = curl_easy_perform(curl_handle);
+        /* get it! */
+        res = curl_easy_perform(curl_handle);
 
-    if( res != CURLE_OK) {
-        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-    } else {
-	printf("%lu bytes received in memory %p, seq=%d.\n",  \
-               p_shm_recv_buf->size, p_shm_recv_buf->buf, p_shm_recv_buf->seq);
+        if( res != CURLE_OK) {
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        } else {
+            printf("%lu bytes received in memory %p, seq=%d.\n",  \
+                   p_shm_recv_buf->size, p_shm_recv_buf->buf, p_shm_recv_buf->seq);
         
+        }
+        /* cleaning up */
+        curl_easy_cleanup(curl_handle);
+        curl_global_cleanup();
+        shmdt(p_shm_recv_buf);
+    } else if ( cpid > 0 ) {    /* parent proc */
+        int state;
+        waitpid(cpid, &state, 0);
+        sprintf(fname, "./output_%d_%d.png", p_shm_recv_buf->seq, pid);
+        write_file(fname, p_shm_recv_buf->buf, p_shm_recv_buf->size);
+        shmdt(p_shm_recv_buf);
+        shmctl(shmid, IPC_RMID, NULL);
+    } else {
+        perror("fork");
+        abort();
     }
 
-    sprintf(fname, "./output_%d_%d.png", p_shm_recv_buf->seq, pid);
-    write_file(fname, p_shm_recv_buf->buf, p_shm_recv_buf->size);
 
-    /* cleaning up */
-    curl_easy_cleanup(curl_handle);
-    curl_global_cleanup();
-    shmdt(p_shm_recv_buf);
-    shmctl(shmid, IPC_RMID, NULL);
     return 0;
 }

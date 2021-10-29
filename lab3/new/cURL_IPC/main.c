@@ -173,16 +173,6 @@ int shm_recv_buf_init(RECV_BUF *ptr, size_t nbytes)
     return 0;
 }
 
-//int local_count;
-//while(1){
-//    mutex{
-//        local_count = count;
-//        count++;
-//    }
-//    curl(local_count);
-//    keep looping until count is 50;
-//}
-
 
 /**
  * @brief output data in memory to a file
