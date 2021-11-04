@@ -8,8 +8,14 @@
  * @brief  stack to push/pop integer(s), API header  
  * @author yqhuang@uwaterloo.ca
  */
+typedef struct int_stack
+{
+    int size;               /* the max capacity of the stack */
+    int pos;                /* position of last item pushed onto the stack */
+    int *items;             /* stack of stored integers */
+} ISTACK;
 
-struct int_stack;
+//struct int_stack;
 
 int sizeof_shm_stack(int size);
 int init_shm_stack(struct int_stack *p, int stack_size);

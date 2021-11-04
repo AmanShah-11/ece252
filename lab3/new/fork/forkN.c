@@ -27,12 +27,13 @@
 #include <sys/time.h>
 #include <semaphore.h>
 #include "shm_stack.h"
+#include <stdbool.h>
 
 
 #define SHM_SIZE 256
 #define NUM_CHILD 6
 #define ECE252_HEADER "X-Ece252-Fragment: "
-
+#define BUF_SIZE 1024000
 #define STACK_SIZE 50
 void push_all(struct int_stack *p, int start);
 void pop_all(struct int_stack *p);
@@ -41,8 +42,8 @@ void test_shm();
 
 
 typedef struct {
-    struct int_stack *pic_stack;
-    struct int_stack *pic_int_stack;
+    struct int_stack pic_stack;
+    struct int_stack pic_int_stack;
     int p_num_strip;
     sem_t spaces;
     sem_t items;
@@ -63,7 +64,6 @@ size_t header_cb_curl(char *p_recv, size_t size, size_t nmemb, void *userdata)
 {
     int realsize = size * nmemb;
     RECV_BUF *p = userdata;
-
     if (realsize > strlen(ECE252_HEADER) &&
         strncmp(p_recv, ECE252_HEADER, strlen(ECE252_HEADER)) == 0) {
 
@@ -71,11 +71,13 @@ size_t header_cb_curl(char *p_recv, size_t size, size_t nmemb, void *userdata)
         p->seq = atoi(p_recv + strlen(ECE252_HEADER));
 
     }
+//    printf("Header CB is being called3\n");
     return realsize;
 }
 
 size_t write_cb_curl(char *p_recv, size_t size, size_t nmemb, void *p_userdata)
 {
+//    printf("Write CB is being called\n");
     size_t realsize = size * nmemb;
     RECV_BUF *p = (RECV_BUF *)p_userdata;
 
@@ -89,6 +91,25 @@ size_t write_cb_curl(char *p_recv, size_t size, size_t nmemb, void *p_userdata)
     p->buf[p->size] = 0;
 
     return realsize;
+}
+
+int shm_recv_buf_init(RECV_BUF *ptr, size_t nbytes)
+{
+    if ( ptr == NULL ) {
+        return 1;
+    }
+
+    ptr->buf = (char *)ptr + sizeof(RECV_BUF);
+    ptr->size = 0;
+    ptr->max_size = nbytes;
+    ptr->seq = -1;              /* valid seq should be non-negative */
+
+    return 0;
+}
+
+int sizeof_shm_recv_buf(size_t nbytes)
+{
+    return (sizeof(RECV_BUF) + sizeof(char) * nbytes);
 }
 
 int consume(int n, int shmid);
@@ -134,8 +155,8 @@ int produce(int n, int shmid, shared_data * shared_data_temp){
 
 
     /* Infinite while loop until we finish all 50 strips*/
-    while(1){
-//        printf("In while loop\n");
+    while(true){
+        printf("In while loop\n");
         int produce_count;
         /* Critical section for obtaining strip num */
         pthread_mutex_lock(&shared_data_temp->p_mutex);
@@ -146,67 +167,103 @@ int produce(int n, int shmid, shared_data * shared_data_temp){
 
         if (produce_count <= 50){
             /* Make cURL call to server */
+            /* specify URL to get */
+            char img_buffer[100];
+            sprintf(img_buffer, "http://ece252-1.uwaterloo.ca:2530/image?img=1&part=%d", produce_count);
+            printf("%s", img_buffer);
+//            char img_buffer[100] = "http://ece252-1.uwaterloo.ca:2530/image?img=1&part=20";
+
+            printf("img buffer\n");
+
             CURL *curl_handle;
             CURLcode res;
+            RECV_BUF *p_shm_recv_buf;
+            int shmid_buff;
+            int shm_size = sizeof_shm_recv_buf(BUF_SIZE);
+
+            printf("shm_size = %d.\n", shm_size);
+            shmid_buff = shmget(IPC_PRIVATE, shm_size, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+            if ( shmid == -1 ) {
+                perror("shmget");
+                abort();
+            }
+
+            p_shm_recv_buf = shmat(shmid_buff, NULL, 0);
+            shm_recv_buf_init(p_shm_recv_buf, BUF_SIZE);
+
 //
             curl_global_init(CURL_GLOBAL_DEFAULT);
 //
 //            /* init a curl session */
-//            curl_handle = curl_easy_init();
-//
-//            if (curl_handle == NULL) {
-//                fprintf(stderr, "curl_easy_init: returned NULL\n");
-//                return 1;
-//            }
+            curl_handle = curl_easy_init();
 
-            /* specify URL to get */
-//            char img_buffer[100];
-//            sprintf(img_buffer, "http://ece252-1.uwaterloo.ca:2530/image?img=1&part=%i", produce_count);
-//            curl_easy_setopt(curl_handle, CURLOPT_URL, img_buffer);
-//
-//            /* register write call back function to process received data */
-//            curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_cb_curl);
-//
-//            RECV_BUF *p_shm_recv_buf;
-//            /* user defined data structure passed to the call back function */
-//            curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)p_shm_recv_buf);
-//
-//            /* register header call back function to process received header data */
-//            curl_easy_setopt(curl_handle, CURLOPT_HEADERFUNCTION, header_cb_curl);
-//            /* user defined data structure passed to the call back function */
-//            curl_easy_setopt(curl_handle, CURLOPT_HEADERDATA, (void *)p_shm_recv_buf);
-//
-//            /* some servers requires a user-agent field */
-//            curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+            if (curl_handle == NULL) {
+                fprintf(stderr, "curl_easy_init: returned NULL\n");
+                return 1;
+            }
 
+//            printf("after easy init\n");
+
+            /* register write call back function to process received data */
+            curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_cb_curl);
+
+//            printf("After curl write function\n");
+            curl_easy_setopt(curl_handle, CURLOPT_URL, img_buffer);
+
+//            printf("write cb curl\n");
+
+            /* user defined data structure passed to the call back function */
+            curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)p_shm_recv_buf);
+
+//            printf("write opt write data\n");
+
+            /* register header call back function to process received header data */
+            curl_easy_setopt(curl_handle, CURLOPT_HEADERFUNCTION, header_cb_curl);
+
+//            printf("write opt header function \n");
+
+            /* user defined data structure passed to the call back function */
+            curl_easy_setopt(curl_handle, CURLOPT_HEADERDATA, (void *)p_shm_recv_buf);
+
+//            printf("write opt header data \n");
+
+            /* some servers requires a user-agent field */
+            curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+
+//            printf("write lib curl agent \n");
 
             /* get it! */
-//            res = curl_easy_perform(curl_handle);
-//
-//            if( res != CURLE_OK) {
-//                fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-//            } else {
-//                printf("%lu bytes received in memory %p, seq=%d.\n",  \
-//                   p_shm_recv_buf->size, p_shm_recv_buf->buf, p_shm_recv_buf->seq);
-//                printf("The strip num %i and data%p \n", produce_count, p_shm_recv_buf->buf);
-//
-//            }
+            res = curl_easy_perform(curl_handle);
+//            printf("Performing curl easy perform\n");
+
+            if( res != CURLE_OK) {
+                fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            } else {
+                printf("%lu bytes received in memory %p, seq=%d.\n",  \
+                   p_shm_recv_buf->size, p_shm_recv_buf->buf, p_shm_recv_buf->seq);
+                printf("The strip num %i and data%p \n", produce_count, p_shm_recv_buf->buf);
+
+            }
+//            printf("Done Performing curl easy perform\n");
             /* cleaning up */
-//            curl_easy_cleanup(curl_handle);
-//            curl_global_cleanup();
+            curl_easy_cleanup(curl_handle);
+            curl_global_cleanup();
 
 
 //            printf("Checking to see if it gets to before sem wait\n");
             /* Wait for stack to be not full then add to it*/
 //            printf("Before sem wait is being called\n");
+//            printf("CHeck to see if before sem wait\n");
             sem_wait(&shared_data_temp->spaces);
+//            printf("CHeck to see if after sem wait\n");
 //            printf("Checking to see if in sem_wait\n");
             pthread_mutex_lock(&shared_data_temp->stack_mutex);
-//            push(shared_data_temp->pic_stack, produce_count);
+            push(&shared_data_temp->pic_stack, (int *) p_shm_recv_buf->buf);
             pthread_mutex_unlock(&shared_data_temp->stack_mutex);
             sem_post(&shared_data_temp->items);
+//            printf("About to go up to top of while loop\n");
         } else{
-//            printf("Exiting loop for %i", n);
+            printf("Exiting loop for %i", n);
 //            print_all_items_on_stack(shared_data_temp->pic_stack);
             break;
         }
@@ -336,17 +393,27 @@ int main()
     pthread_mutexattr_setpshared(&newtempmutex, PTHREAD_PROCESS_SHARED);
     pthread_mutex_init(&s_data.p_mutex, &newtempmutex);
 
-    struct int_stack *pstack;
+    pthread_mutexattr_t tempmutex2;
+    pthread_mutexattr_init(&tempmutex2);
+    pthread_mutexattr_setpshared(&tempmutex2, PTHREAD_PROCESS_SHARED);
+    pthread_mutex_init(&s_data.c_mutex, &tempmutex2);
+
+    pthread_mutexattr_t tempmutex3;
+    pthread_mutexattr_init(&tempmutex3);
+    pthread_mutexattr_setpshared(&tempmutex3, PTHREAD_PROCESS_SHARED);
+    pthread_mutex_init(&s_data.stack_mutex, &tempmutex3);
+
+    ISTACK pstack;
 //    memset(pstack, 0, sizeof(pstack));
-    init_shm_stack(pstack, STACK_SIZE);
+    init_shm_stack(&pstack, STACK_SIZE);
 
-    s_data.pic_stack = &pstack;
+    s_data.pic_stack = pstack;
 
-    struct int_stack *num_stack;
+    ISTACK num_stack;
 //    memset(num_stack, 0, sizeof(num_stack));
-    init_shm_stack(num_stack, STACK_SIZE);
+    init_shm_stack(&num_stack, STACK_SIZE);
 
-    s_data.pic_int_stack = &num_stack;
+    s_data.pic_int_stack = num_stack;
 
     int value3;
     sem_getvalue(&s_data2->spaces, &value3);
