@@ -1,0 +1,25 @@
+I am the worker number 0 with process 72584275
+P num strip is 1 
+Shared data strip is 0
+I am the worker number 1 with process 72584275
+P num strip is 2 
+Shared data strip is 0
+I am the worker number 2 with process 72584275
+P num strip is 3 
+Shared data strip is 0
+I am the worker number 4 with process 72584275
+P num strip is 4 
+Shared data strip is 0
+I am the worker number 5 with process 72584275
+P num strip is 5 
+Shared data strip is 0
+I am the worker number 3 with process 72584275
+P num strip is 6 
+Shared data strip is 0
+Child 0 is done! Woohoo
+Child 1 is done! Woohoo
+Child 2 is done! Woohoo
+Child 3 is done! Woohoo
+Child 4 is done! Woohoo
+Child 5 is done! Woohoo
+Shared data strip is 0
