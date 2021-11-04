@@ -45,6 +45,7 @@ typedef struct {
     struct int_stack pic_stack;
     struct int_stack pic_int_stack;
     int p_num_strip;
+    int c_num_strip;
     sem_t spaces;
     sem_t items;
     pthread_mutex_t p_mutex;
@@ -112,21 +113,48 @@ int sizeof_shm_recv_buf(size_t nbytes)
     return (sizeof(RECV_BUF) + sizeof(char) * nbytes);
 }
 
-int consume(int n, int shmid);
+int write_file(const char *path, const void *in, size_t len)
+{
+    FILE *fp = NULL;
+
+    if (path == NULL) {
+        fprintf(stderr, "write_file: file name is null!\n");
+        return -1;
+    }
+
+    if (in == NULL) {
+        fprintf(stderr, "write_file: input data is null!\n");
+        return -1;
+    }
+
+    fp = fopen(path, "wb");
+    if (fp == NULL) {
+        perror("fopen");
+        return -2;
+    }
+
+    if (fwrite(in, 1, len, fp) != len) {
+        fprintf(stderr, "write_file: imcomplete write!\n");
+        return -3;
+    }
+    return fclose(fp);
+}
+
+int consume(int n, int shmid, int sleepTime, shared_data * shared_data_temp);
 int produce(int n, int shmid, shared_data * shared_data_temp);
 
-int consume(int n, int shmid)
+int consume(int n, int shmid, int sleepTime, shared_data * shared_data_temp)
 {
 //    struct int_stack *pstack;
 //    pstack = shmat(shmid, NULL, 0);
-//    if ( pstack == (void *) -1 ) {
+//    if ( pstack == (void ) -1 ) {
 //        perror("shmat");
 //        abort();
 //    }
 //    int temp = n;
 //    push(pstack, temp);
 //    printf("child: pstack = %p\n", pstack);
-//    usleep((n+1)*1000);
+//    usleep(1000sleepTime);
 //    printf("Worker ID=%d, pid = %d, ppid = %d.\n", n, getpid(), getppid());
 //
 //    if ( shmdt(pstack) != 0 ) {
@@ -135,7 +163,77 @@ int consume(int n, int shmid)
 //    }
 //
 //    return 0;
-    printf("I am the worker number %i with process %i\n", n, shmid);
+
+//    int size = 0;
+//    int seq = 0;
+//
+//    // char fname[256];
+//    RECV_BUF buf;
+//    usleep(1000sleepTime);
+//    printf("starting consumer\n");
+//
+//    /* if stack not empty */
+//    sem_wait(&shared_data_temp->items);
+//    if (is_empty(pic_stack) == 0)
+//    {
+//
+//        int seq = pic_stack->items[pic_stack->pos].seq;
+//        int size = pic_stack->items[pic_stack->pos].size;
+//        char *buffer = malloc(size * sizeof(char));
+//
+//
+//        pthread_mutex_lock(&shared_data_temp->stack_mutex);
+//        // int file_num;
+//        int *var = (int *) buffer; //.buf
+//        pop(pic_stack, var);
+//        char * newBuffer =  (char*) var;
+//        // pop(pic_int_stack, &file_num);
+//
+//        char formatstring[256];
+//        file_names[shared_data_temp->p_numstrip] = malloc(sizeof(formatstring));
+//        snprintf(formatstring, 256, "output%i_%jd.png", shared_data_temp->p_num_strip, pid);
+//        strcpy(file_names[shared_data_temp->p_num_strip], formatstring);
+//
+//        pthread_mutex_unlock(&shared_data_temp->stackmutex);
+//
+//        sprintf(fname, "./output%d_%d.png", seq, pid);
+//        write_file(fname, newBuffer, size);
+//
+//        free(buffer);
+//
+//    }
+//    sem_post(&shared_data_temp->spaces);
+//
+//    printf("I am the worker number %i with process %i\n", n, shmid);
+//    return 0;
+
+    while(true){
+        int consume_count;
+        pthread_mutex_lock(&shared_data_temp->c_mutex);
+        shared_data_temp->c_num_strip += 1;
+        consume_count = shared_data_temp->c_num_strip;
+        pthread_mutex_unlock(&shared_data_temp->c_mutex);
+
+        if (consume_count <= 50){
+            int *temp_data;
+            int *img_num;
+
+            sem_wait(&shared_data_temp->items);
+            pthread_mutex_lock(&shared_data_temp->stack_mutex);
+            pop(&shared_data_temp->pic_stack, temp_data);
+            pop(&shared_data_temp->pic_int_stack, img_num);
+            pthread_mutex_unlock(&shared_data_temp->stack_mutex);
+            sem_post(&shared_data_temp->spaces);
+
+            char * newBuffer = (char*) temp_data;
+            char formatstring[256];
+            long int pid = 999999;
+            snprintf(formatstring, 256, "output%i_%jd.png", *img_num, pid);
+            write_file(formatstring, newBuffer, 20000);
+        } else{
+            break;
+        }
+    }
     return 0;
 }
 
@@ -166,6 +264,7 @@ int produce(int n, int shmid, shared_data * shared_data_temp){
         printf("Produce count is %d %d\n", produce_count, n);
 
         if (produce_count <= 50){
+            printf("Being called on the %d th time", produce_count);
             /* Make cURL call to server */
             /* specify URL to get */
             char img_buffer[100];
@@ -258,7 +357,10 @@ int produce(int n, int shmid, shared_data * shared_data_temp){
 //            printf("CHeck to see if after sem wait\n");
 //            printf("Checking to see if in sem_wait\n");
             pthread_mutex_lock(&shared_data_temp->stack_mutex);
-            push(&shared_data_temp->pic_stack, (int *) p_shm_recv_buf->buf);
+//            char *item = (char *)p_shm_recv_buf + sizeof(RECV_BUF);
+//            int *int_item = (int *) item;
+            int *item = 1;
+//            push(&shared_data_temp->pic_stack, *item);
             pthread_mutex_unlock(&shared_data_temp->stack_mutex);
             sem_post(&shared_data_temp->items);
 //            printf("About to go up to top of while loop\n");
@@ -357,6 +459,11 @@ int main()
 
     s_data.p_num_strip = 0;
 
+    int c_strip_num = 0;
+    s_data.c_num_strip = &c_strip_num;
+    s_data.c_num_strip = 0;
+
+
     if ( sem_init(&s_data.spaces, 1, STACK_SIZE) != 0 ) {
         perror("sem_init(sem[0])");
         abort();
@@ -393,15 +500,15 @@ int main()
     pthread_mutexattr_setpshared(&newtempmutex, PTHREAD_PROCESS_SHARED);
     pthread_mutex_init(&s_data.p_mutex, &newtempmutex);
 
-    pthread_mutexattr_t tempmutex2;
-    pthread_mutexattr_init(&tempmutex2);
-    pthread_mutexattr_setpshared(&tempmutex2, PTHREAD_PROCESS_SHARED);
-    pthread_mutex_init(&s_data.c_mutex, &tempmutex2);
-
-    pthread_mutexattr_t tempmutex3;
-    pthread_mutexattr_init(&tempmutex3);
-    pthread_mutexattr_setpshared(&tempmutex3, PTHREAD_PROCESS_SHARED);
-    pthread_mutex_init(&s_data.stack_mutex, &tempmutex3);
+//    pthread_mutexattr_t newtempmutex2;
+//    pthread_mutexattr_init(&newtempmutex2);
+//    pthread_mutexattr_setpshared(&newtempmutex2, PTHREAD_PROCESS_SHARED);
+//    pthread_mutex_init(&s_data.c_mutex, &newtempmutex2);
+//
+//    pthread_mutexattr_t newtempmutex3;
+//    pthread_mutexattr_init(&newtempmutex3);
+//    pthread_mutexattr_setpshared(&newtempmutex3, PTHREAD_PROCESS_SHARED);
+//    pthread_mutex_init(&s_data.stack_mutex, &newtempmutex3);
 
     ISTACK pstack;
 //    memset(pstack, 0, sizeof(pstack));
